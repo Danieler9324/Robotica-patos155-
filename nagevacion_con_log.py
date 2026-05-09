@@ -1,85 +1,120 @@
+#--------------------------------------------------
+# ESTE CODIGO SOLO PUEDE CORRER EN UBUNTU (LINUX)
+#--------------------------------------------------
+
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
+from serial.tools import list_ports
+
 import numpy as np
 import serial
 import time
 import json
 import os
-from datetime import datetime
 import threading
 
+from datetime import datetime
+
+
 class ObstacleAvoidance(Node):
+
     def __init__(self):
         super().__init__('obstacle_avoidance')
 
-        # ================= PARAMETROS (en metros) =================
-        self.declare_parameter('min_distance_fr', 0.85)
-        self.declare_parameter('max_distance_fr', 0.9)
-        self.declare_parameter('min_distance_ld', 0.6)
-        self.declare_parameter('max_distance_ld', 0.7)
-
+        # Definicion de paramatros que usara el RPLIDAR
+        self.declare_parameter('min_distance_fr', 0.54)  # en metros (esta es la medida mas importante ya que es en donde se basa de cuando girar y cuando no)
+        self.declare_parameter('max_distance_fr', 1.2)   # en metros
+        self.declare_parameter('min_distance_ld', 0.4)  # en metros
+        self.declare_parameter('max_distance_ld', 0.6)  # en metros
         self.min_distance_fr = self.get_parameter('min_distance_fr').value
         self.max_distance_fr = self.get_parameter('max_distance_fr').value
         self.min_distance_ld = self.get_parameter('min_distance_ld').value
         self.max_distance_ld = self.get_parameter('max_distance_ld').value
 
-        # ================= LOG JSON =================
-        self.declare_parameter('log_file', 'movement_log.json')
+
+        # Crea el registro de los comandos usados durante el recorrido
+        #Crea un archivo llamado "pruebaX.json" (La X representa un numero cualquiera)
+        numeroarchivo = 0
+
+        while os.path.exists(f"prueba{numeroarchivo}.json"):
+            numeroarchivo += 1
+
+        self.declare_parameter('log_file',f"prueba{numeroarchivo}.json")
+
         self.log_file = self.get_parameter('log_file').value
+    
         self._log_lock = threading.Lock()
 
-        if os.path.exists(self.log_file):
-            try:
-                os.remove(self.log_file)
-                self.get_logger().info(f"Log anterior eliminado: {self.log_file}")
-            except Exception as e:
-                self.get_logger().warning(f"No se pudo eliminar log anterior: {e}")
+        print("Archivo:", self.log_file)
 
-        # ================= SENSORES ULTRASONICOS =================
+        # Almacena los datos de los sensores en el JSON
         self.ultrasonic_data = {
-            'MIT': 0, 'MID': 0, 'MFI': 0, 
-            'MFD': 0, 'MDD': 0, 'MDT': 0,
-            'LIT': 0, 'LID': 0, 'LFI': 0,
-            'LFD': 0, 'LDD': 0, 'LDT': 0
+            'MIT': 0,
+            'MID': 0,
+            'MFI': 0,
+            'MFD': 0,
+            'MDD': 0,
+            'MDT': 0,
         }
 
-        # ================= ESTADO =====================
+        # Se define el estado inicial del arduino
         self.last_cmd = None
         self.last_state = ""
+
         self.arduino_busy = False
         self.timeout_timer = None
-        self.ultrasonic_data = {}
 
-        # ================= SERIAL =====================
+        # Se definen kas variables para guardar las distancias del lidar, para mandarlas al JSON
+        self.dist_front = 0.0
+        self.dist_left = 0.0
+        self.dist_right = 0.0
+
+        # Se hace la conexion con el Arduino mediante el SERIAL
         try:
             self.ser = serial.Serial('/dev/ttyUSB1', 9600, timeout=1)
+
             time.sleep(2)
+
             self.ser.reset_input_buffer()
-            self.get_logger().info("Serial conectado al Arduino")
-            
-            self.serial_thread = threading.Thread(target=self.listen_arduino, daemon=True)
+
+            self.get_logger().info(
+                "Serial conectado al Arduino"
+            )
+
+            self.serial_thread = threading.Thread(
+                target=self.listen_arduino,
+                daemon=True
+            )
+
             self.serial_thread.start()
-            
+
         except Exception as e:
             self.get_logger().error(f"Error serial: {e}")
             self.ser = None
 
-#HOLA AMIGUITOS SOY PAOLA YEEEEEIIIII
-
-        # ================= ROS ========================
+        # Se hace la subscripcion a scan, de esta manera sabremos que nos esta mandando el LIDAR
         self.scan_subscription = self.create_subscription(
             LaserScan,
             'scan',
             self.scan_callback,
             10
         )
-        self.cmd_publisher = self.create_publisher(Twist, 'cmd_vel', 10)
 
+        # Se crea el topico cmd_vel para la comunicacion entre el lidar y el Arduino
+        self.cmd_publisher = self.create_publisher(
+            Twist,
+            'cmd_vel',
+            10
+        )
+
+    # Se definen los sectores del lidar para guardarlos en el archivo JSON
     def get_sector(self, msg, angle_start_deg, angle_end_deg):
+
         angle_min = msg.angle_min
         angle_inc = msg.angle_increment
+
         ranges = np.array(msg.ranges)
 
         ranges[ranges == 0] = self.max_distance_fr
@@ -90,54 +125,102 @@ class ObstacleAvoidance(Node):
         angles_deg = np.degrees(angles)
 
         if angle_start_deg < angle_end_deg:
-            mask = (angles_deg >= angle_start_deg) & (angles_deg <= angle_end_deg)
+
+            mask = (
+                (angles_deg >= angle_start_deg) &
+                (angles_deg <= angle_end_deg)
+            )
+
         else:
-            # Cruza 0°
-            mask = (angles_deg >= angle_start_deg) | (angles_deg <= angle_end_deg)
+            # Cruza 180°
+            mask = (
+                (angles_deg >= angle_start_deg) |
+                (angles_deg <= angle_end_deg)
+            )
 
         return ranges[mask]
-    
-    # ================= ESCUCHAR ARDUINO =================
+
+    # Se escucha al Arduino, de esta manera se mandan los prints que envie el Arduino al JSON
     def listen_arduino(self):
+
+        # Si hay mensajes vacios, no los manda al archivo JSON
+        IGNORE_MESSAGES = [
+            "------------"
+        ]
+
         while True:
             if self.ser and self.ser.in_waiting > 0:
                 try:
-                    line = self.ser.readline().decode('utf-8').strip()
-                    
-                    # Detectar fin de secuencia
+                    line = self.ser.readline() \
+                        .decode('utf-8') \
+                        .strip()
+
+                    # Cuando el Arduino manda una "T" significa que ha acabado la secuencia que estaba ejecutando
                     if line == 'T':
+
                         self.arduino_busy = False
                         self.last_state = ""
                         self.last_cmd = None
+
                         if self.timeout_timer:
                             self.timeout_timer.cancel()
                             self.timeout_timer = None
-                        self.get_logger().info(" Arduino termino secuencia")
+
+                        self.get_logger().info(
+                            "Arduino termino secuencia"
+                        )
+
+                        self.log_arduino_message(
+                            "FIN_SECUENCIA"
+                        )
                     
-                    # Parsear datos de sensores (JSON)
+                    # Manda los datos de los sensores al JSON
                     elif line.startswith('{') and line.endswith('}'):
+
                         try:
                             sensor_data = json.loads(line)
-                            self.ultrasonic_data.update(sensor_data)
-                            self.print_sensor_data(sensor_data)
+
+                            self.ultrasonic_data.update(
+                                sensor_data
+                            )
+
+                            self.print_sensor_data(
+                                sensor_data
+                            )
+
                         except json.JSONDecodeError:
-                            self.get_logger().warning(f"JSON invalido: {line}")
-                    
-                    # Filtrar mensajes de debug del control remoto
-                    elif line.startswith("Ch #") or line == "------------":
+
+                            self.get_logger().warning(
+                                f"JSON invalido: {line}"
+                            )
+
+                    # Filtra el JSON
+                    elif line.startswith("Ch #"):
                         pass
-                    
+
+                    elif line in IGNORE_MESSAGES:
+                        pass
+
+                    # Cuando llega el print del Arduino, lo manda al JSON
                     elif line:
-                        self.get_logger().info(f"🔊 Arduino: {line}")
-                        
+
+                        self.get_logger().info(
+                            f"Arduino: {line}"
+                        )
+
+                        self.log_arduino_message(line)
+
                 except Exception as e:
-                    self.get_logger().warning(f"Error leyendo Arduino: {e}")
+
+                    self.get_logger().warning(
+                        f"Error leyendo Arduino: {e}"
+                    )
+
             time.sleep(0.01)
 
-
-
-    # ================= IMPRIMIR SENSORES =================
+    # imprimir sensores en la terminal
     def print_sensor_data(self, data):
+
         self.get_logger().info(
             f"Ultrasonicos (cm): "
             f"IT={data.get('MIT', 0)} "
@@ -148,157 +231,376 @@ class ObstacleAvoidance(Node):
             f"DT={data.get('MDT', 0)}"
         )
 
-    # ================= OBTENER VALOR SENSOR =================
+    # Obtiene el valor del sensor
     def get_ultrasonic_value(self, sensor_name):
+
         return self.ultrasonic_data.get(sensor_name, 0)
 
-    # ================= TIMEOUT DE SEGURIDAD =================
+    # Se define un timeout por precausion de que el Arduino se quede "Trabado"
     def reset_busy(self):
+
         if self.arduino_busy:
-            self.get_logger().warning("⏰ Timeout - Desbloqueando Arduino forzosamente")
+
+            self.get_logger().warning(
+                "Timeout - Desbloqueando Arduino"
+            )
+
             self.arduino_busy = False
             self.last_state = ""
+
             self.timeout_timer = None
 
-    # ================= ENVIO SERIAL =================
+    # Envia el comando al Arduino, ya sea F = Adelante, R = Derecha, L = Izquierda
     def send_command(self, cmd):
-        if self.arduino_busy:
-            self.get_logger().warning(f"⏸️ Arduino ocupado - Ignorando: {cmd}")
-            return
-            
-        if cmd == self.last_cmd and cmd == 'F':
-            return
-            
-        self.last_cmd = cmd
-        self.log_direction(cmd, source="send_command")
-        
-        if self.ser:
-            if cmd in ['L', 'R']:
-                self.arduino_busy = True
-                # self.timeout_timer = threading.Timer(10.0, self.reset_busy)
-                # self.timeout_timer.start()
-                self.get_logger().info(f"🔒 Arduino ocupado - Giro {cmd}")
-            
-            self.ser.write((cmd + '\n').encode())
-        else:
-            self.get_logger().warning(f"⚠️ Arduino NO conectado: {cmd}")
-            
-        self.get_logger().info(f"📤 Arduino <- {cmd}")
 
-    # ================= REGISTRO JSON =================
+        if self.arduino_busy:
+
+            self.get_logger().warning(
+                f"Arduino ocupado - Ignorando: {cmd}"
+            )
+
+            return
+
+        if cmd == self.last_cmd and cmd == "F":
+            return
+
+        self.last_cmd = cmd
+
+        self.log_direction(
+            cmd,
+            source="send_command"
+        )
+
+        if self.ser:
+
+            if cmd in ['L', 'R', 'U']:
+
+                self.arduino_busy = True
+
+                self.get_logger().info(
+                    f"Arduino ocupado - Giro {cmd}"
+                )
+
+            self.ser.write(
+                (cmd + '\n').encode()
+            )
+
+        else:
+
+            self.get_logger().warning(
+                f"Arduino NO conectado: {cmd}"
+            )
+
+        self.get_logger().info(
+            f"Arduino <- {cmd}"
+        )
+
+    # ==========================================================
+    # LOG DE COMANDOS
+    # ==========================================================
     def log_direction(self, cmd, source="send_command"):
-        if cmd not in ("F", "L", "R", "S"):
+
+        if cmd not in ("F", "L", "R", "S", "U"):
             return
 
         entry = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+
+            "type": "command",
+
             "command": cmd,
-            "source": source
+
+            "source": source,
+
+            "lidar": {
+                "front": self.dist_front,
+                "left": self.dist_left,
+                "right": self.dist_right
+            },
+
+            "ultrasonic": self.ultrasonic_data.copy()
         }
 
+        self.append_log(entry)
+
+    # ==========================================================
+    # LOG MENSAJES ARDUINO
+    # ==========================================================
+    def log_arduino_message(self, message):
+
+        entry = {
+            "timestamp": datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+
+            "type": "arduino_message",
+
+            "message": message,
+
+            "last_command": self.last_cmd,
+
+            "lidar": {
+                "front": self.dist_front,
+                "left": self.dist_left,
+                "right": self.dist_right
+            },
+
+            "ultrasonic": self.ultrasonic_data.copy()
+        }
+
+        self.append_log(entry)
+
+    # ==========================================================
+    # ESCRIBIR LOG
+    # ==========================================================
+    def append_log(self, entry):
+
         with self._log_lock:
+
             try:
+
                 data = []
 
                 if os.path.exists(self.log_file):
-                    with open(self.log_file, "r", encoding="utf-8") as f:
+
+                    with open(
+                        self.log_file,
+                        "r",
+                        encoding="utf-8"
+                    ) as f:
+
                         try:
                             data = json.load(f)
+
                             if not isinstance(data, list):
                                 data = []
+
                         except json.JSONDecodeError:
                             data = []
 
                 data.append(entry)
 
                 tmp_path = self.log_file + ".tmp"
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
 
-                os.replace(tmp_path, self.log_file)
+                with open(
+                    tmp_path,
+                    "w",
+                    encoding="utf-8"
+                ) as f:
+
+                    json.dump(
+                        data,
+                        f,
+                        ensure_ascii=False,
+                        indent=2
+                    )
+
+                os.replace(
+                    tmp_path,
+                    self.log_file
+                )
 
             except Exception as e:
-                self.get_logger().warning(f"⚠️ Error log JSON: {e}")
 
-    # ================= LIDAR CALLBACK ================
+                self.get_logger().warning(
+                    f"Error log JSON: {e}"
+                )
+
+    # ==========================================================
+    # CALLBACK LIDAR
+    # ==========================================================
     def scan_callback(self, msg):
+
         if self.arduino_busy:
             return
-            
+
         ranges = np.array(msg.ranges)
+
         ranges[ranges == 0] = self.max_distance_fr
         ranges[np.isnan(ranges)] = self.max_distance_fr
         ranges[np.isinf(ranges)] = self.max_distance_fr
-        
-        n = len(ranges)
-        front = self.get_sector(msg, 350, 10)
-        left  = self.get_sector(msg, 85, 95)
-        right = self.get_sector(msg, 265, 275)
-        
-        front = np.concatenate([ranges[-n*30//360:], ranges[:n*30//360]])
-        left  = ranges[n*60//360:n*120//360]
-        right = ranges[n*240//360:n*300//360]
 
+        # ================= SECTORES =================
+        front = self.get_sector(msg, 170, -170)
+
+        left = self.get_sector(msg, -100, -80)
+
+        right = self.get_sector(msg, 80, 100)
+
+        # ================= PROMEDIO MINIMO =================
         def avg_min(sector):
-            return np.mean(np.sort(sector)[:5])
+
+            if len(sector) == 0:
+                return self.max_distance_fr
+
+            valid = sector[sector > 0.05]
+
+            if len(valid) == 0:
+                return self.max_distance_fr
+
+            return np.mean(
+                np.sort(valid)[:3]
+            )
 
         dist_front = avg_min(front)
-        dist_left  = avg_min(left)
+        dist_left = avg_min(left)
         dist_right = avg_min(right)
 
-        if dist_front < self.min_distance_fr:
+        # Guardar distancias
+        self.dist_front = float(dist_front)
+        self.dist_left = float(dist_left)
+        self.dist_right = float(dist_right)
+
+        # ==================================================
+        # PRIORIDAD MAXIMA
+        # ==================================================
+        if (
+            dist_front < self.min_distance_fr and
+            dist_right < self.min_distance_ld and
+            dist_left < self.min_distance_ld
+        ):
+
+            state = (
+                f"Obst DER IZQ FRONTAL "
+                f"({dist_right:.2f}m) - U"
+            )
+
+            if state != self.last_state:
+
+                self.send_command('U')
+
+                self.get_logger().warn(state)
+
+                self.last_state = state
+
+        # ==================================================
+        # OBSTACULO FRONTAL
+        # ==================================================
+        elif dist_front < self.min_distance_fr:
+
             if dist_left > dist_right:
-                state = f"🔄 Obst. FRONTAL ({dist_front:.2f}m) - Giro IZQ"
+
+                state = (
+                    f"Obst frontal "
+                    f"({dist_front:.2f}m) - IZQ"
+                )
+
                 if state != self.last_state:
+
                     self.send_command('L')
+
                     self.get_logger().warn(state)
+
                     self.last_state = state
+
             else:
-                state = f"🔄 Obst. FRONTAL ({dist_front:.2f}m) - Giro DER"
+
+                state = (f"Obst frontal "f"({dist_front:.2f}m) - DER")
+
                 if state != self.last_state:
+
                     self.send_command('R')
+
                     self.get_logger().warn(state)
+
                     self.last_state = state
 
-        elif dist_left < self.min_distance_ld and dist_front < self.min_distance_fr:
-            state = f"⚠️ Obst. IZQ ({dist_left:.2f}m) - Ajuste DER"
+        # ==================================================
+        # IZQUIERDA
+        # ==================================================
+        elif dist_left < self.min_distance_ld:
+
+            state = (
+                f"Obst IZQ "
+                f"({dist_left:.2f}m)"
+            )
+
             if state != self.last_state:
+
                 self.send_command('R')
+
                 self.get_logger().warn(state)
+
                 self.last_state = state
 
-        elif dist_right < self.min_distance_ld and dist_front < self.min_distance_fr:
-            state = f"⚠️ Obst. DER ({dist_right:.2f}m) - Ajuste IZQ"
+        # ==================================================
+        # DERECHA
+        # ==================================================
+        elif dist_right < self.min_distance_ld:
+
+            state = (
+                f"Obst DER "
+                f"({dist_right:.2f}m)"
+            )
+
             if state != self.last_state:
+
                 self.send_command('L')
+
                 self.get_logger().warn(state)
+
                 self.last_state = state
 
+        # ==================================================
+        # LIBRE
+        # ==================================================
         else:
-            state = f"✅ Avanzando (F:{dist_front:.2f} L:{dist_left:.2f} R:{dist_right:.2f})"
+
+            state = (
+                f"Libre "
+                f"F:{dist_front:.2f} "
+                f"L:{dist_left:.2f} "
+                f"R:{dist_right:.2f}"
+            )
+
             if state != self.last_state:
+
                 self.send_command('F')
-                self.get_logger().info(f">>> {state}")
+
+                self.get_logger().info(state)
+
                 self.last_state = state
 
-    # ================= CIERRE SEGURO =================
+    # ==========================================================
+    # CIERRE
+    # ==========================================================
     def destroy_node(self):
+
         if self.timeout_timer:
             self.timeout_timer.cancel()
+
         if self.ser:
+
             self.ser.write(b'S\n')
+
             self.ser.close()
+
         super().destroy_node()
 
+
+# ==============================================================
+# MAIN
+# ==============================================================
 def main(args=None):
+
     rclpy.init(args=args)
+
     node = ObstacleAvoidance()
+
     try:
         rclpy.spin(node)
+
     except KeyboardInterrupt:
+
         node.send_command('S')
+
     finally:
+
         node.destroy_node()
+
         rclpy.shutdown()
+
 
 main()
