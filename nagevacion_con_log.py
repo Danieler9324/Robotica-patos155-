@@ -66,7 +66,7 @@ class ObstacleAvoidance(Node):
         self.arduino_busy = False
         self.timeout_timer = None
 
-        # Se definen kas variables para guardar las distancias del lidar, para mandarlas al JSON
+        # Se definen kas variables para guardar las distancias del RPLIDAR, para mandarlas al JSON
         self.dist_front = 0.0
         self.dist_left = 0.0
         self.dist_right = 0.0
@@ -94,7 +94,7 @@ class ObstacleAvoidance(Node):
             self.get_logger().error(f"Error serial: {e}")
             self.ser = None
 
-        # Se hace la subscripcion a scan, de esta manera sabremos que nos esta mandando el LIDAR
+        # Se hace la subscripcion a scan, de esta manera sabremos que nos esta mandando el RPLIDAR
         self.scan_subscription = self.create_subscription(
             LaserScan,
             'scan',
@@ -102,14 +102,14 @@ class ObstacleAvoidance(Node):
             10
         )
 
-        # Se crea el topico cmd_vel para la comunicacion entre el lidar y el Arduino
+        # Se crea el topico cmd_vel para la comunicacion entre el RPLIDAR y el Arduino
         self.cmd_publisher = self.create_publisher(
             Twist,
             'cmd_vel',
             10
         )
 
-    # Se definen los sectores del lidar para guardarlos en el archivo JSON
+    # Se definen los sectores del RPLIDAR para guardarlos en el archivo JSON
     def get_sector(self, msg, angle_start_deg, angle_end_deg):
 
         angle_min = msg.angle_min
@@ -250,7 +250,7 @@ class ObstacleAvoidance(Node):
 
             self.timeout_timer = None
 
-    # Envia el comando al Arduino, ya sea F = Adelante, R = Derecha, L = Izquierda
+    # Envia el comando al Arduino, ya sea F = Adelante, R = Derecha, L = Izquierda, S = Stop, U = Vuelta en U
     def send_command(self, cmd):
 
         if self.arduino_busy:
@@ -295,9 +295,7 @@ class ObstacleAvoidance(Node):
             f"Arduino <- {cmd}"
         )
 
-    # ==========================================================
-    # LOG DE COMANDOS
-    # ==========================================================
+    # Se mandan al JSON los comandos enviados al Arduino
     def log_direction(self, cmd, source="send_command"):
 
         if cmd not in ("F", "L", "R", "S", "U"):
@@ -325,9 +323,7 @@ class ObstacleAvoidance(Node):
 
         self.append_log(entry)
 
-    # ==========================================================
-    # LOG MENSAJES ARDUINO
-    # ==========================================================
+    # Se mandan al JSON los comandos que el Arduino regresa
     def log_arduino_message(self, message):
 
         entry = {
@@ -352,9 +348,7 @@ class ObstacleAvoidance(Node):
 
         self.append_log(entry)
 
-    # ==========================================================
-    # ESCRIBIR LOG
-    # ==========================================================
+    # Escribe el archivo JSON 
     def append_log(self, entry):
 
         with self._log_lock:
@@ -408,9 +402,7 @@ class ObstacleAvoidance(Node):
                     f"Error log JSON: {e}"
                 )
 
-    # ==========================================================
-    # CALLBACK LIDAR
-    # ==========================================================
+    # Se definen los sectores de escaneo del RPLIDAR
     def scan_callback(self, msg):
 
         if self.arduino_busy:
@@ -422,14 +414,14 @@ class ObstacleAvoidance(Node):
         ranges[np.isnan(ranges)] = self.max_distance_fr
         ranges[np.isinf(ranges)] = self.max_distance_fr
 
-        # ================= SECTORES =================
-        front = self.get_sector(msg, 170, -170)
+        # Se definen los sectores de escaneo del RPLIDAR (hay veces que es necesario cambiar los parametros señalados)
+        front = self.get_sector(msg, 170, -170) # <--
 
-        left = self.get_sector(msg, -100, -80)
+        left = self.get_sector(msg, -100, -80) # <--
+ 
+        right = self.get_sector(msg, 80, 100) # <--
 
-        right = self.get_sector(msg, 80, 100)
-
-        # ================= PROMEDIO MINIMO =================
+        # Promedio minimo de escaneo del RPLIDAR
         def avg_min(sector):
 
             if len(sector) == 0:
@@ -448,14 +440,12 @@ class ObstacleAvoidance(Node):
         dist_left = avg_min(left)
         dist_right = avg_min(right)
 
-        # Guardar distancias
+        # Guarda las distancias
         self.dist_front = float(dist_front)
         self.dist_left = float(dist_left)
         self.dist_right = float(dist_right)
 
-        # ==================================================
-        # PRIORIDAD MAXIMA
-        # ==================================================
+        # Vuelta en U
         if (
             dist_front < self.min_distance_fr and
             dist_right < self.min_distance_ld and
@@ -475,9 +465,7 @@ class ObstacleAvoidance(Node):
 
                 self.last_state = state
 
-        # ==================================================
-        # OBSTACULO FRONTAL
-        # ==================================================
+        # Obstaculo frontal y se decide para que lado girar, dependiendo de donde este una pared
         elif dist_front < self.min_distance_fr:
 
             if dist_left > dist_right:
@@ -507,9 +495,7 @@ class ObstacleAvoidance(Node):
 
                     self.last_state = state
 
-        # ==================================================
-        # IZQUIERDA
-        # ==================================================
+        # Gira a la izquierda si hay un obstaculo a la derecha
         elif dist_left < self.min_distance_ld:
 
             state = (
@@ -525,9 +511,7 @@ class ObstacleAvoidance(Node):
 
                 self.last_state = state
 
-        # ==================================================
-        # DERECHA
-        # ==================================================
+        # Gira a la derecha si hay un obstaculo a la izquierda
         elif dist_right < self.min_distance_ld:
 
             state = (
@@ -543,9 +527,7 @@ class ObstacleAvoidance(Node):
 
                 self.last_state = state
 
-        # ==================================================
-        # LIBRE
-        # ==================================================
+        # Camino libre
         else:
 
             state = (
@@ -563,9 +545,7 @@ class ObstacleAvoidance(Node):
 
                 self.last_state = state
 
-    # ==========================================================
-    # CIERRE
-    # ==========================================================
+    # Cierre del nodo de ROS2
     def destroy_node(self):
 
         if self.timeout_timer:
@@ -580,9 +560,7 @@ class ObstacleAvoidance(Node):
         super().destroy_node()
 
 
-# ==============================================================
-# MAIN
-# ==============================================================
+# Se define main (Ejecuta el programa en si)
 def main(args=None):
 
     rclpy.init(args=args)
