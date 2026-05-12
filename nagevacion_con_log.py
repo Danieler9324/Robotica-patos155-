@@ -79,14 +79,9 @@ class ObstacleAvoidance(Node):
 
             self.ser.reset_input_buffer()
 
-            self.get_logger().info(
-                "Serial conectado al Arduino"
-            )
+            self.get_logger().info("Serial conectado al Arduino")
 
-            self.serial_thread = threading.Thread(
-                target=self.listen_arduino,
-                daemon=True
-            )
+            self.serial_thread = threading.Thread(target=self.listen_arduino, daemon=True)
 
             self.serial_thread.start()
 
@@ -126,17 +121,11 @@ class ObstacleAvoidance(Node):
 
         if angle_start_deg < angle_end_deg:
 
-            mask = (
-                (angles_deg >= angle_start_deg) &
-                (angles_deg <= angle_end_deg)
-            )
+            mask = ((angles_deg >= angle_start_deg) & (angles_deg <= angle_end_deg))
 
         else:
             # Cruza 180°
-            mask = (
-                (angles_deg >= angle_start_deg) |
-                (angles_deg <= angle_end_deg)
-            )
+            mask = ((angles_deg >= angle_start_deg) | (angles_deg <= angle_end_deg))
 
         return ranges[mask]
 
@@ -166,13 +155,9 @@ class ObstacleAvoidance(Node):
                             self.timeout_timer.cancel()
                             self.timeout_timer = None
 
-                        self.get_logger().info(
-                            "Arduino termino secuencia"
-                        )
+                        self.get_logger().info("Arduino termino secuencia")
 
-                        self.log_arduino_message(
-                            "FIN_SECUENCIA"
-                        )
+                        self.log_arduino_message("FIN_SECUENCIA")
                     
                     # Manda los datos de los sensores al JSON
                     elif line.startswith('{') and line.endswith('}'):
@@ -180,19 +165,13 @@ class ObstacleAvoidance(Node):
                         try:
                             sensor_data = json.loads(line)
 
-                            self.ultrasonic_data.update(
-                                sensor_data
-                            )
+                            self.ultrasonic_data.update(sensor_data)
 
-                            self.print_sensor_data(
-                                sensor_data
-                            )
+                            self.print_sensor_data(sensor_data)
 
                         except json.JSONDecodeError:
 
-                            self.get_logger().warning(
-                                f"JSON invalido: {line}"
-                            )
+                            self.get_logger().warning(f"JSON invalido: {line}")
 
                     # Filtra el JSON
                     elif line.startswith("Ch #"):
@@ -204,17 +183,13 @@ class ObstacleAvoidance(Node):
                     # Cuando llega el print del Arduino, lo manda al JSON
                     elif line:
 
-                        self.get_logger().info(
-                            f"Arduino: {line}"
-                        )
+                        self.get_logger().info(f"Arduino: {line}")
 
                         self.log_arduino_message(line)
 
                 except Exception as e:
 
-                    self.get_logger().warning(
-                        f"Error leyendo Arduino: {e}"
-                    )
+                    self.get_logger().warning(f"Error leyendo Arduino: {e}")
 
             time.sleep(0.01)
 
@@ -241,9 +216,7 @@ class ObstacleAvoidance(Node):
 
         if self.arduino_busy:
 
-            self.get_logger().warning(
-                "Timeout - Desbloqueando Arduino"
-            )
+            self.get_logger().warning("Timeout - Desbloqueando Arduino")
 
             self.arduino_busy = False
             self.last_state = ""
@@ -255,9 +228,7 @@ class ObstacleAvoidance(Node):
 
         if self.arduino_busy:
 
-            self.get_logger().warning(
-                f"Arduino ocupado - Ignorando: {cmd}"
-            )
+            self.get_logger().warning(f"Arduino ocupado - Ignorando: {cmd}")
 
             return
 
@@ -266,10 +237,7 @@ class ObstacleAvoidance(Node):
 
         self.last_cmd = cmd
 
-        self.log_direction(
-            cmd,
-            source="send_command"
-        )
+        self.log_direction(cmd,source="send_command")
 
         if self.ser:
 
@@ -277,21 +245,15 @@ class ObstacleAvoidance(Node):
 
                 self.arduino_busy = True
 
-                self.get_logger().info(
-                    f"Arduino ocupado - Giro {cmd}"
-                )
+                self.get_logger().info(f"Arduino ocupado - Giro {cmd}")
 
             self.ser.write((cmd + '\n').encode())
 
         else:
 
-            self.get_logger().warning(
-                f"Arduino NO conectado: {cmd}"
-            )
+            self.get_logger().warning(f"Arduino NO conectado: {cmd}")
 
-        self.get_logger().info(
-            f"Arduino <- {cmd}"
-        )
+        self.get_logger().info(f"Arduino <- {cmd}")
 
     # Se mandan al JSON los comandos enviados al Arduino
     def log_direction(self, cmd, source="send_command"):
@@ -357,11 +319,7 @@ class ObstacleAvoidance(Node):
 
                 if os.path.exists(self.log_file):
 
-                    with open(
-                        self.log_file,
-                        "r",
-                        encoding="utf-8"
-                    ) as f:
+                    with open(self.log_file, "r") as f:
 
                         try:
                             data = json.load(f)
@@ -376,29 +334,15 @@ class ObstacleAvoidance(Node):
 
                 tmp_path = self.log_file + ".tmp"
 
-                with open(
-                    tmp_path,
-                    "w",
-                    encoding="utf-8"
-                ) as f:
+                with open(tmp_path, "w") as f:
 
-                    json.dump(
-                        data,
-                        f,
-                        ensure_ascii=False,
-                        indent=2
-                    )
+                    json.dump(data, f, ensure_ascii=False, indent=2)
 
-                os.replace(
-                    tmp_path,
-                    self.log_file
-                )
+                os.replace(tmp_path, self.log_file)
 
             except Exception as e:
 
-                self.get_logger().warning(
-                    f"Error log JSON: {e}"
-                )
+                self.get_logger().warning(f"Error log JSON: {e}")
 
     # Se definen los sectores de escaneo del RPLIDAR
     def scan_callback(self, msg):
@@ -430,9 +374,7 @@ class ObstacleAvoidance(Node):
             if len(valid) == 0:
                 return self.max_distance_fr
 
-            return np.mean(
-                np.sort(valid)[:3]
-            )
+            return np.mean(np.sort(valid)[:3])
 
         dist_front = avg_min(front)
         dist_left = avg_min(left)
@@ -444,16 +386,9 @@ class ObstacleAvoidance(Node):
         self.dist_right = float(dist_right)
 
         # Vuelta en U
-        if (
-            dist_front < self.min_distance_fr and
-            dist_right < self.min_distance_ld and
-            dist_left < self.min_distance_ld
-        ):
+        if (dist_front < self.min_distance_fr and dist_right < self.min_distance_ld and dist_left < self.min_distance_ld):
 
-            state = (
-                f"Obst DER IZQ FRONTAL "
-                f"({dist_right:.2f}m) - U"
-            )
+            state = (f"Obst DER IZQ FRONTAL " f"({dist_right:.2f}m) - U")
 
             if state != self.last_state:
 
@@ -468,10 +403,7 @@ class ObstacleAvoidance(Node):
 
             if dist_left > dist_right:
 
-                state = (
-                    f"Obst frontal "
-                    f"({dist_front:.2f}m) - IZQ"
-                )
+                state = (f"Obst frontal " f"({dist_front:.2f}m) - IZQ")
 
                 if state != self.last_state:
 
@@ -496,10 +428,7 @@ class ObstacleAvoidance(Node):
         # Gira a la izquierda si hay un obstaculo a la derecha
         elif dist_left < self.min_distance_ld:
 
-            state = (
-                f"Obst IZQ "
-                f"({dist_left:.2f}m)"
-            )
+            state = (f"Obst IZQ " f"({dist_left:.2f}m)")
 
             if state != self.last_state:
 
@@ -512,10 +441,7 @@ class ObstacleAvoidance(Node):
         # Gira a la derecha si hay un obstaculo a la izquierda
         elif dist_right < self.min_distance_ld:
 
-            state = (
-                f"Obst DER "
-                f"({dist_right:.2f}m)"
-            )
+            state = (f"Obst DER " f"({dist_right:.2f}m)")
 
             if state != self.last_state:
 
@@ -528,12 +454,7 @@ class ObstacleAvoidance(Node):
         # Camino libre
         else:
 
-            state = (
-                f"Libre "
-                f"F:{dist_front:.2f} "
-                f"L:{dist_left:.2f} "
-                f"R:{dist_right:.2f}"
-            )
+            state = (f"Libre " f"F:{dist_front:.2f} " f"L:{dist_left:.2f} " f"R:{dist_right:.2f}")
 
             if state != self.last_state:
 
