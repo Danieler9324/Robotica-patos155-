@@ -7,17 +7,15 @@ from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
 from serial.tools import list_ports
-
 import numpy as np
 import serial
 import time
 import json
 import os
 import threading
-
 from datetime import datetime
 
-class ObstacleAvoidance(Node):
+class ObstacleAvoidance(Node): 
 
     def __init__(self):
         super().__init__('obstacle_avoidance')
@@ -33,19 +31,14 @@ class ObstacleAvoidance(Node):
         self.max_distance_ld = self.get_parameter('max_distance_ld').value
         self.modo = "Manual"
 
-        # Crea el registro de los comandos usados durante el recorrido
-        #Crea un archivo llamado "pruebaX.json" (La X representa un numero cualquiera)
+        #Crea el registro de los comandos usados durante el recorrido
+        #Crea un archivo llamado "pruebaX.json"
         numeroarchivo = 0
-
         while os.path.exists(f"prueba{numeroarchivo}.json"):
             numeroarchivo += 1
-
         self.declare_parameter('log_file',f"prueba{numeroarchivo}.json")
-
         self.log_file = self.get_parameter('log_file').value
-    
         self._log_lock = threading.Lock()
-
         print("Archivo:", self.log_file)
 
         # Almacena los datos de los sensores en el JSON
@@ -353,7 +346,7 @@ class ObstacleAvoidance(Node):
         self.dist_left = float(dist_left)
         self.dist_right = float(dist_right)
         
-        while self.modo == "Autonomo":
+        if self.modo == "Autonomo":
             # Vuelta en U
             if (dist_front < self.min_distance_fr and dist_right < self.min_distance_ld and dist_left < self.min_distance_ld):
 
