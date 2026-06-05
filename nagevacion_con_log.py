@@ -72,6 +72,10 @@ class ObstacleAvoidance(Node):
             self.serial_thread = threading.Thread(target=self.listen_arduino, daemon=True)
             self.serial_thread.start()
 
+            time.sleep(0.5)
+            self.ser.write(b'LIDAR_ON\n')
+            self.get_logger().info("Enviado: LIDAR_ON")
+
         except Exception as e:
             self.get_logger().error(f"Error serial: {e}")
             self.ser = None
@@ -164,9 +168,15 @@ class ObstacleAvoidance(Node):
                         print("-----------------Manual-------------------")
                         self.modo="Manual"
                         self.last_cmd = None
-                        self.last_state = None
-                        self.arduino_busy = None
+                        self.last_state = ""
+                        self.arduino_busy = False
                         self.get_logger().info("Modo: Manual")
+
+                    elif line == "Lidar conectado":
+                        self.get_logger().info("Arduino confirma: Lidar conectado")
+
+                    elif line == "Se perdio conexion con el Lidar":
+                        self.get_logger().warning("Arduino confirma: Se perdio conexion con el Lidar")
 
                     # Filtra el JSON
                     elif line.startswith("Ch #"):
@@ -201,12 +211,10 @@ class ObstacleAvoidance(Node):
 
     # Obtiene el valor del sensor
     def get_ultrasonic_value(self, sensor_name):
-
         return self.ultrasonic_data.get(sensor_name, 0)
 
     # Se define un timeout por precaucion de que el Arduino se quede "Trabado"
     def reset_busy(self):
-
         if self.arduino_busy:
             self.get_logger().warning("Timeout - Desbloqueando Arduino")
             self.arduino_busy = False
@@ -350,7 +358,8 @@ class ObstacleAvoidance(Node):
         self.dist_front = float(dist_front)
         self.dist_left = float(dist_left)
         self.dist_right = float(dist_right)
-        
+
+        # Solo manda comandos cuando esta en modo AUTONOMO
         if self.modo == "Autonomo":
             # Vuelta en U
             if (dist_front < self.min_distance_fr and dist_right < self.min_distance_ld and dist_left < self.min_distance_ld):
@@ -422,6 +431,8 @@ class ObstacleAvoidance(Node):
             self.timeout_timer.cancel()
 
         if self.ser:
+            self.ser.write(b'LIDAR_OFF\n')
+            time.sleep(0.2)
             self.ser.write(b'S\n')
             self.ser.close()
 
@@ -438,6 +449,8 @@ def main(args=None):
 
     except KeyboardInterrupt:
         node.send_command('S')
+        if node.ser:
+            node.ser.write(b'LIDAR_OFF\n')
 
     finally:
         node.destroy_node()
