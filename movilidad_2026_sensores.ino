@@ -1,12 +1,20 @@
 #include <Servo.h>
+#include <DHT.h>
+
+// Sensor de Gas
+#define MQ_DO A3
+#define MQ_AO A0
+
+// Sensor de temperatura/humedad
+#define DHT_PIN A5
+#define DHT_TYPE DHT11
+DHT dht(DHT_PIN, DHT_TYPE);
 
 Servo servo_yB;
 
 // definicion de los puertos de entrada 
 // control remoto 
 int rcPins[6] = {25,29,27,31,33,35};
-// ??????????????
-int ReDig[8] = {0,0,0,0,0,0,0,0};
 
 // definicion de salidas para control de los relevadores
 int izq1=10;
@@ -30,6 +38,12 @@ int potenciaD = 0;
 bool ultimoModoManual = false; // Estado de la palanca para cambiar de Manual a Autonomo (false = autonomo , true = manual)
 bool lidarActivo = false; // Estado actual del Lidar
 
+// Variables para guardar lecturas de sensores
+int mq_digital = 0;
+float mq_analogico = 0.0;
+float temperatura = 0.0;
+float humedad = 0.0;
+
 //int servo_pinyB = 41;
 // definicion de servos para la camara
 //Servo serH;
@@ -43,35 +57,34 @@ float chValue[6];
 int PWM_PINI = 6;
 int PWM_PIND = 7;
 
-
 /* Ultrasónicos  */
-  // conexiones de triger y echo Izquierdo trasero 
-  const int trig_it = 41;           
-  const int echo_it = 42;
-  // conexiones de triger y echo Izquierdo delantero
-  const int trig_id = 5;
-  const int echo_id = 4;
-  // conexiones de triger y echo delantero izquierdo
-  const int trig_fi = 19;
-  const int echo_fi = 20;
-  // conexiones de triger y echo delantero derecho
-  const int trig_fd = 8;
-  const int echo_fd = 40;
-  // conexiones de triger y echo derecho delantero
-  const int trig_dd = 21;
-  const int echo_dd = 22;
-  // conexiones de triger y echo derecho trasero
-  const int trig_dt = 23;
-  const int echo_dt = 24;
+// conexiones de triger y echo Izquierdo trasero 
+const int trig_it = 41;           
+const int echo_it = 42;
+// conexiones de triger y echo Izquierdo delantero
+const int trig_id = 5;
+const int echo_id = 4;
+// conexiones de triger y echo delantero izquierdo
+const int trig_fi = 19;
+const int echo_fi = 20;
+// conexiones de triger y echo delantero derecho
+const int trig_fd = 8;
+const int echo_fd = 40;
+// conexiones de triger y echo derecho delantero
+const int trig_dd = 21;
+const int echo_dd = 22;
+// conexiones de triger y echo derecho trasero
+const int trig_dt = 23;
+const int echo_dt = 24;
 
 // variables para sensores ultrasonicos 
-  long MIT,MID,MFI,MFD,MDD,MDT; // Mediciones de sensores ultrasonicos en centimetros 
-  int  LIT,LID,LFI,LFD,LDD,LDT; // Valores logicos de lectura de sensores ultrasonicos
+long MIT,MID,MFI,MFD,MDD,MDT; // Mediciones de sensores ultrasonicos en centimetros 
+int LIT,LID,LFI,LFD,LDD,LDT; // Valores logicos de lectura de sensores ultrasonicos
  
 const int pulseInDelay = 30000;   //20000;
 
-long potenciaAutomaticaMaxima = 1;
-long potenciaAutomatica = 0.8;
+// long potenciaAutomaticaMaxima = 1;
+// long potenciaAutomatica = 0.8;
  
 void setup() 
 { 
@@ -101,6 +114,11 @@ void setup()
   pinMode(echo_dd, INPUT);
   pinMode(trig_dt, OUTPUT);
   pinMode(echo_dt, INPUT);
+
+  // configuracion de pines sensores gas/temperatura
+  pinMode(MQ_DO, INPUT);
+  pinMode(MQ_AO, INPUT);
+  dht.begin();
 
   // ???????????????????
   //serH.attach(hori);
@@ -136,6 +154,29 @@ void readChannel(int channel)
   
 }
 
+void leer_sensores_multi()
+{
+  // Lee sensor de gas
+  mq_digital   = digitalRead(MQ_DO);
+  mq_analogico = analogRead(MQ_AO);
+
+  // Lee temperatura y humedad
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+
+  // Verifica que la lectura sea válida
+  if (!isnan(t)) temperatura = t;
+  if (!isnan(h)) humedad = h;
+
+  // Imprime en monitor serial
+  Serial.print("{");
+  Serial.print("\"GAS_D\":");  Serial.print(mq_digital);
+  Serial.print(",\"GAS_A\":"); Serial.print(mq_analogico);
+  Serial.print(",\"TEMP\":");  Serial.print(temperatura);
+  Serial.print(",\"HUM\":");   Serial.print(humedad);
+  Serial.println("}");
+}
+
 void vueltaDerecha()
 {
   Serial.println("--------- Alto");
@@ -169,7 +210,6 @@ void vueltaDerecha()
   digitalWrite(der1,LOW);
   digitalWrite(der2,LOW); 
   delay(5000);
-
 
   lee_ultrasonicos();
   
@@ -371,7 +411,7 @@ void control_motores()
   bool modoManual = (chValue[4] > .5);
 
   if (!modoManual) {
-    // ── MODO AUTÓNOMO ──────────────────────────────────────────
+    // ── MODO AUTONOMO ──────────────────────────────────────────
     if (ultimoModoManual) {
       Serial.println("CAMBIO A AUTONOMO");
       while (Serial.available()) Serial.read();
@@ -386,7 +426,7 @@ void control_motores()
       mensaje = Serial.readStringUntil('\n');
       mensaje.trim();
 
-      // Checa si es un mensaje de estado del LIDAR
+      // Revisa si es un mensaje de estado del LIDAR
       if (mensaje == "LIDAR_ON") {
         lidarActivo = true;
         Serial.println("Lidar conectado");
@@ -399,7 +439,6 @@ void control_motores()
     }
 
     if (LFD == 0 && LFI == 0) {
-      // ── Emergencia ultrasónica — siempre tiene prioridad ──
       if (LDD == 0 && LID == 1) {
         vueltaIzquierda();
       } else if (LDD == 1 && LID == 0) {
@@ -413,7 +452,7 @@ void control_motores()
       }
 
     } else if (lidarActivo) {
-      // ── LIDAR activo — sigue sus comandos ──
+      // LIDAR activo asi que empieza a seguir sus comandos
       if (mensaje == "F") {
         analogWrite(PWM_PINI, potenciaI_frente);
         analogWrite(PWM_PIND, potenciaD_frente);
@@ -428,7 +467,7 @@ void control_motores()
       } else if (mensaje == "U") {
         vueltaU();
       } else {
-        // Sin comando — alto
+        // Sin comando entonces se detiene
         digitalWrite(izq1, LOW); 
         digitalWrite(izq2, LOW);
         digitalWrite(der1, LOW); 
@@ -436,9 +475,9 @@ void control_motores()
       }
 
     } else {
-      // ── LIDAR desactivado — navega con ultrasonicos ──
+      // LIDAR desactivado asi que empieza a navegar mediante los ultrasonicos
       if (LIT == 1 && LID == 1 && LDD == 1 && LDT == 1) {
-        // Todo despejado — avanza
+        // Todo despejado avanza
         analogWrite(PWM_PINI, potenciaI_frente);
         analogWrite(PWM_PIND, potenciaD_frente);
         digitalWrite(izq1, HIGH); 
@@ -450,7 +489,7 @@ void control_motores()
       } else if (LDD == 1 && LID == 0) {
         vueltaDerecha();
       } else {
-        // Sin salida clara — para
+        // Sin salida para
         digitalWrite(izq1, LOW); 
         digitalWrite(izq2, LOW);
         digitalWrite(der1, LOW); 
@@ -628,5 +667,7 @@ void loop()
   printChannel();
   //decodifica los valores del control remoto en movimentos de los motores 
   control_motores(); 
+  // Imprime en el puerto serial y en la terminal de python los valores de los sensores de gas y temperatura/humedad
+  leer_sensores_multi();
  
 }

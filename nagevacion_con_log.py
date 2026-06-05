@@ -147,11 +147,21 @@ class ObstacleAvoidance(Node):
                     
                     # Manda los datos de los sensores al JSON
                     elif line.startswith('{') and line.endswith('}'):
-
                         try:
                             sensor_data = json.loads(line)
-                            self.ultrasonic_data.update(sensor_data)
-                            self.print_sensor_data(sensor_data)
+
+                            if 'GAS_D' in sensor_data:
+                                # Datos de gas y temperatura/humedad
+                                self.get_logger().info(
+                                    f"Gas: digital={sensor_data.get('GAS_D')} "
+                                    f"analogico={sensor_data.get('GAS_A')} | "
+                                    f"Temp={sensor_data.get('TEMP')}°C "
+                                    f"Humedad={sensor_data.get('HUM')}%"
+                                )
+                            else:
+                                # Datos de ultrasonicos
+                                self.ultrasonic_data.update(sensor_data)
+                                self.print_sensor_data(sensor_data)
 
                         except json.JSONDecodeError:
                             self.get_logger().warning(f"JSON invalido: {line}")
